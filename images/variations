@@ -1,0 +1,7 @@
+const form = new FormData();
+form.append("model", "gpt-image-1");
+form.append("image", image, { filename, contentType: "image/png" }); 
+form.append("prompt", prompt);
+form.append("size", "1024x1024");
+
+fetch("https://api.openai.com/v1/images/variations", { ... })
