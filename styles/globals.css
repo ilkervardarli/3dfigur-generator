@@ -1,0 +1,8 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  padding: 16px;
+  background: #fff;
+  color: #111;
+  font-family: Inter, system-ui, Arial, sans-serif;
+}
