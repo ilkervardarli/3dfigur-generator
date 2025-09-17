@@ -3,7 +3,10 @@ import FormData from 'form-data';
 
 export const config = { api: { bodyParser: false } };
 
-async function parseMultipart(req: NextApiRequest): Promise<{ image: Buffer; style: string; filename: string; }>{
+// ---- multipart parse (busboy) ----
+async function parseMultipart(
+  req: NextApiRequest
+): Promise<{ image: Buffer; style: string; filename: string }> {
   const busboy = require('busboy');
   return new Promise((resolve, reject) => {
     const bb = busboy({ headers: req.headers });
@@ -21,9 +24,10 @@ async function parseMultipart(req: NextApiRequest): Promise<{ image: Buffer; sty
     bb.on('field', (name: string, val: string) => { if (name === 'style') style = val; });
 
     bb.on('close', () => {
-      if (!img) return reject(new Error('image not found'));
-      resolve({ image: img!, style, filename });
+      if (!img || img.length === 0) return reject(new Error('image not found or empty'));
+      resolve({ image: img, style, filename });
     });
+
     bb.on('error', reject);
     (req as any).pipe(bb);
   });
@@ -41,8 +45,18 @@ function styleToPrompt(style: string) {
   }
 }
 
+async function callOpenAI(form: FormData, apiKey: string) {
+  const res = await fetch('https://api.openai.com/v1/images/edits', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, ...form.getHeaders() },
+    body: form as any,
+  });
+  return res;
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
+
   try {
     const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
     if (!OPENAI_API_KEY) return res.status(500).json({ error: 'OPENAI_API_KEY missing on server' });
@@ -50,23 +64,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { image, style, filename } = await parseMultipart(req);
     const prompt = styleToPrompt(style);
 
-    // 🔧 DÜZELTME: images/edits için alan adı 'image' olmalı
-    const form = new FormData();
-    form.append('model', 'gpt-image-1');
-    form.append('prompt', prompt);
-    form.append('image', image as any, { filename, contentType: 'image/jpeg' }); // ← burada 'image'
-    form.append('size', '1024x1024');
+    // ---- TRY #1: alan adı 'image' ----
+    const form1 = new FormData();
+    form1.append('model', 'gpt-image-1');
+    form1.append('prompt', prompt);
+    form1.append('image', image as any, { filename, contentType: 'application/octet-stream' });
+    form1.append('size', '1024x1024');
 
-    const r = await fetch('https://api.openai.com/v1/images/edits', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, ...form.getHeaders() },
-      body: form as any,
-    });
+    let r = await callOpenAI(form1, OPENAI_API_KEY);
 
+    // 400 ve multipart parse hatası ise TRY #2: 'image[]'
     if (!r.ok) {
-      const errText = await r.text();
-      console.error('OpenAI error', r.status, errText);
-      return res.status(r.status).json({ error: errText });
+      const txt = await r.text();
+      const maybeMultipartErr =
+        r.status === 400 && /invalid_multipart_form_data|failed to parse multipart/i.test(txt);
+
+      if (maybeMultipartErr) {
+        const form2 = new FormData();
+        form2.append('model', 'gpt-image-1');
+        form2.append('prompt', prompt);
+        form2.append('image[]', image as any, { filename, contentType: 'application/octet-stream' });
+        form2.append('size', '1024x1024');
+        r = await callOpenAI(form2, OPENAI_API_KEY);
+
+        if (!r.ok) {
+          return res.status(r.status).json({ error: JSON.parse(txt)?.error ?? txt });
+        }
+      } else {
+        // başka bir hata
+        return res.status(r.status).json({ error: (() => { try { return JSON.parse(txt); } catch { return txt; } })() });
+      }
     }
 
     const out = await r.json();
@@ -75,7 +102,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     return res.status(200).json({ image: `data:image/png;base64,${b64}` });
   } catch (e: any) {
-    console.error(e);
-    return res.status(500).json({ error: e.message || 'Internal Error' });
+    return res.status(500).json({ error: e?.message || 'Internal Error' });
   }
 }
