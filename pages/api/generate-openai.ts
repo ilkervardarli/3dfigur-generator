@@ -1,9 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import FormData from 'form-data';
 
-export const config = { api: { bodyParser: false } }; // multipart için
+export const config = { api: { bodyParser: false } };
 
-// Basit multipart parser (busboy)
 async function parseMultipart(req: NextApiRequest): Promise<{ image: Buffer; style: string; filename: string; }>{
   const busboy = require('busboy');
   return new Promise((resolve, reject) => {
@@ -51,19 +50,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { image, style, filename } = await parseMultipart(req);
     const prompt = styleToPrompt(style);
 
-    // Node: form-data ile multipart hazırla
+    // 🔧 DÜZELTME: images/edits için alan adı 'image' olmalı
     const form = new FormData();
     form.append('model', 'gpt-image-1');
     form.append('prompt', prompt);
-    form.append('image[]', image as any, { filename, contentType: 'image/jpeg' });
+    form.append('image', image as any, { filename, contentType: 'image/jpeg' }); // ← burada 'image'
     form.append('size', '1024x1024');
 
     const r = await fetch('https://api.openai.com/v1/images/edits', {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
-        ...form.getHeaders(),
-      },
+      headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, ...form.getHeaders() },
       body: form as any,
     });
 
